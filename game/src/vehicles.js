@@ -1,208 +1,195 @@
-// SOLARA R10 — vehicles.js
-// Traffic cars + police cruisers. Wedge sports coupes, boxy vans,
-// teal taxis with yellow roof signs, red motorcycle with rider.
-// Headlights = bright white squares ON; taillights = red strip ON.
+// SOLARA R10 — vehicles: shaped car models, traffic, player-car physics, carjack.
 import * as THREE from 'three';
-import { WORLD } from './config.js';
+import { S } from './config.js';
 
-function mulberry(seed) {
-  let t = seed >>> 0;
-  return function () {
-    t += 0x6D2B79F5;
-    let r = Math.imul(t ^ (t >>> 15), 1 | t);
-    r ^= r + Math.imul(r ^ (r >>> 7), 61 | r);
-    return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
-  };
-}
+const ROAD_LINES = [-256, -192, -128, -64, 0, 64, 128, 192, 256];
 
-const CAR_TYPES = [
-  { name: 'VELOZ COMET RS', kind: 'sports', color: 0xd32f2f, len: 4.6, wedge: true },
-  { name: 'TORTUGA 4X4', kind: 'suv', color: 0x00838f, len: 4.8, wedge: false },
-  { name: 'TAXI SEDAN', kind: 'taxi', color: 0x00838f, len: 4.4, wedge: false, taxi: true },
-  { name: 'BOXY VAN', kind: 'van', color: 0x8d6e63, len: 5.2, wedge: false },
-  { name: 'WHITE VAN', kind: 'van', color: 0xeeeeee, len: 5.2, wedge: false },
-  { name: 'BLACK SEDAN', kind: 'sedan', color: 0x212121, len: 4.5, wedge: false },
-  { name: 'BLUE SEDAN', kind: 'sedan', color: 0x1565c0, len: 4.5, wedge: false },
-  { name: 'YELLOW TAXI', kind: 'taxi', color: 0xf9a825, len: 4.4, wedge: false, taxi: true },
-  { name: 'ORANGE COUPE', kind: 'sports', color: 0xef6c00, len: 4.6, wedge: true },
-  { name: 'KURAMA PELO GT', kind: 'sports', color: 0xff6d00, len: 4.7, wedge: true },
-];
+export const CAR_DEFS = {
+  sports: { name: 'VELOZ COMET RS', color: 0xe53935, top: 24, len: 4.4, wid: 2.0, h: 0.85 },
+  sedan: { name: 'TORTUGA 4X4', color: 0x2e8b8b, top: 20, len: 4.6, wid: 2.0, h: 1.15 },
+  taxi: { name: 'CITY TAXI', color: 0x26a69a, top: 18, len: 4.4, wid: 1.9, h: 1.1 },
+  van: { name: 'CARGO VAN', color: 0x8d6e3f, top: 15, len: 5.2, wid: 2.2, h: 1.9 },
+  whitevan: { name: 'WHITE VAN', color: 0xe8e8e8, top: 15, len: 5.0, wid: 2.1, h: 1.8 },
+  pickup: { name: 'DESERT PICKUP', color: 0x5d8a4a, top: 17, len: 4.8, wid: 2.0, h: 1.25 },
+  coupe: { name: 'KURAMA PELO GT', color: 0xff8c1a, top: 26, len: 4.3, wid: 2.0, h: 0.8 },
+  police: { name: 'PCPD CRUISER', color: 0xf5f5f5, top: 22, len: 4.6, wid: 2.0, h: 1.1 },
+};
 
-function buildCarMesh(type) {
+const wheelGeo = new THREE.CylinderGeometry(0.42, 0.42, 0.35, 12);
+const wheelMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.9 });
+const hubGeo = new THREE.CylinderGeometry(0.2, 0.2, 0.37, 8);
+const hubMat = new THREE.MeshStandardMaterial({ color: 0xd8d8d8, metalness: 0.7, roughness: 0.35 });
+
+export function makeCarMesh(type) {
+  const def = CAR_DEFS[type] || CAR_DEFS.sedan;
   const g = new THREE.Group();
-  const bodyMat = new THREE.MeshLambertMaterial({ color: type.color });
-  const glassMat = new THREE.MeshLambertMaterial({ color: 0x10243e });
-  const tireMat = new THREE.MeshLambertMaterial({ color: 0x111111 });
-  const rimMat = new THREE.MeshLambertMaterial({ color: 0xcfd8dc });
-  const L = type.len, W = 2.0;
-  if (type.wedge) {
-    // low wedge sports coupe: long flat hood, black canopy, wheel arches
-    const body = new THREE.Mesh(new THREE.BoxGeometry(L, 0.55, W), bodyMat);
-    body.position.y = 0.55; g.add(body);
-    const nose = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.35, W - 0.2), bodyMat);
-    nose.position.set(L / 2 - 0.2, 0.45, 0); g.add(nose);
-    const canopy = new THREE.Mesh(new THREE.BoxGeometry(L * 0.45, 0.5, W - 0.5), glassMat);
-    canopy.position.set(-0.3, 1.0, 0); g.add(canopy);
-    const spoiler = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.08, W), bodyMat);
-    spoiler.position.set(-L / 2 + 0.15, 1.05, 0); g.add(spoiler);
-    const skirt = new THREE.Mesh(new THREE.BoxGeometry(L * 0.8, 0.18, W + 0.1),
-      new THREE.MeshLambertMaterial({ color: 0x111111 }));
-    skirt.position.y = 0.32; g.add(skirt);
+  const bodyMat = new THREE.MeshStandardMaterial({ color: def.color, roughness: 0.35, metalness: 0.35 });
+  const glassMat = new THREE.MeshStandardMaterial({ color: 0x14202e, roughness: 0.15, metalness: 0.6 });
+  const body = new THREE.Mesh(new THREE.BoxGeometry(def.wid, def.h, def.len), bodyMat);
+  body.position.y = 0.75; body.castShadow = true; g.add(body);
+  if (type === 'sports' || type === 'coupe') {
+    // low wedge: sloped nose + black canopy
+    const nose = new THREE.Mesh(new THREE.BoxGeometry(def.wid * 0.92, 0.42, 1.1), bodyMat);
+    nose.position.set(0, 0.62, def.len / 2 - 0.3); nose.rotation.x = 0.1; g.add(nose);
+    const canopy = new THREE.Mesh(new THREE.BoxGeometry(def.wid * 0.8, 0.5, 1.7), glassMat);
+    canopy.position.set(0, 1.32, -0.25); canopy.castShadow = true; g.add(canopy);
+    const spoiler = new THREE.Mesh(new THREE.BoxGeometry(def.wid * 0.95, 0.1, 0.5), blackMat());
+    spoiler.position.set(0, 1.28, -def.len / 2 + 0.15); g.add(spoiler);
+  } else if (type === 'van' || type === 'whitevan') {
+    const cab = new THREE.Mesh(new THREE.BoxGeometry(def.wid * 0.9, 0.7, 1.4), glassMat);
+    cab.position.set(0, 1.9, def.len / 2 - 1.0); g.add(cab);
   } else {
-    const body = new THREE.Mesh(new THREE.BoxGeometry(L, 0.9, W), bodyMat);
-    body.position.y = 0.75; g.add(body);
-    const cab = new THREE.Mesh(new THREE.BoxGeometry(L * 0.55, 0.7, W - 0.3), glassMat);
-    cab.position.set(-0.2, 1.5, 0); g.add(cab);
-    if (type.kind === 'van') {
-      const roof = new THREE.Mesh(new THREE.BoxGeometry(L * 0.9, 0.25, W - 0.1), bodyMat);
-      roof.position.set(0, 1.95, 0); g.add(roof);
-    }
+    const cab = new THREE.Mesh(new THREE.BoxGeometry(def.wid * 0.82, 0.62, 2.1), glassMat);
+    cab.position.set(0, 1.32, -0.2); cab.castShadow = true; g.add(cab);
   }
-  if (type.taxi) {
-    const sign = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.3, 0.5),
-      new THREE.MeshBasicMaterial({ color: 0xffea00 }));
-    sign.position.set(0, 1.95, 0); g.add(sign);
+  if (type === 'police') {
+    const hood = new THREE.Mesh(new THREE.BoxGeometry(def.wid * 0.98, 0.1, 1.5), blackMat());
+    hood.position.set(0, 1.22, def.len / 2 - 0.9); g.add(hood);
+    const roof = new THREE.Mesh(new THREE.BoxGeometry(def.wid * 0.98, 0.1, 1.6), blackMat());
+    roof.position.set(0, 1.62, -0.2); g.add(roof);
+    const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.28, def.len * 0.9),
+      new THREE.MeshStandardMaterial({ color: 0xffd21f, emissive: 0xcc9900, emissiveIntensity: 0.4 }));
+    stripe.position.set(def.wid / 2 + 0.01, 0.95, 0); g.add(stripe);
+    const stripe2 = stripe.clone(); stripe2.position.x = -def.wid / 2 - 0.01; g.add(stripe2);
+    const bar = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.22, 0.4),
+      new THREE.MeshStandardMaterial({ color: 0xd21f1f, emissive: 0xff2222, emissiveIntensity: 1.2 }));
+    bar.position.set(0, 1.78, -0.2); g.add(bar);
+    const bar2 = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.22, 0.4),
+      new THREE.MeshStandardMaterial({ color: 0x2266ff, emissive: 0x2266ff, emissiveIntensity: 1.2 }));
+    bar2.position.set(0.75, 1.78, -0.2); g.add(bar2);
   }
-  // headlights: two bright white squares ON
-  const hl = new THREE.MeshBasicMaterial({ color: 0xffffff });
-  for (const s of [-1, 1]) {
-    const h = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.25, 0.4), hl);
-    h.position.set(L / 2 + 0.02, 0.6, s * 0.65); g.add(h);
+  if (type === 'taxi') {
+    const sign = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.28, 0.4),
+      new THREE.MeshStandardMaterial({ color: 0xffd21f, emissive: 0xcc9900, emissiveIntensity: 0.7 }));
+    sign.position.set(0, 1.85, -0.2); g.add(sign);
   }
-  // taillights: red strip ON with halo
-  const tl = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.2, W - 0.3),
-    new THREE.MeshBasicMaterial({ color: 0xff1744 }));
-  tl.position.set(-L / 2 - 0.02, 0.65, 0); g.add(tl);
-  // wheels with cream/silver rims
-  const wheelGeo = new THREE.CylinderGeometry(0.42, 0.42, 0.3, 10);
-  for (const [wx, wz] of [[L / 2 - 0.9, W / 2], [L / 2 - 0.9, -W / 2], [-L / 2 + 0.9, W / 2], [-L / 2 + 0.9, -W / 2]]) {
-    const w = new THREE.Mesh(wheelGeo, tireMat);
-    w.rotation.x = Math.PI / 2;
-    w.position.set(wx, 0.42, wz);
-    g.add(w);
-    const rim = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.32, 8), rimMat);
-    rim.rotation.x = Math.PI / 2;
-    rim.position.set(wx, 0.42, wz);
-    g.add(rim);
+  // headlights (white squares ON) + taillight strip (red ON)
+  const hlMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xfff8d0, emissiveIntensity: 1.4 });
+  for (const sx of [-1, 1]) {
+    const hl = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.24, 0.08), hlMat);
+    hl.position.set(sx * (def.wid / 2 - 0.35), 0.85, def.len / 2 + 0.02); g.add(hl);
   }
+  const tl = new THREE.Mesh(new THREE.BoxGeometry(def.wid * 0.85, 0.2, 0.08),
+    new THREE.MeshStandardMaterial({ color: 0xd21f1f, emissive: 0xff2222, emissiveIntensity: 1.0 }));
+  tl.position.set(0, 0.9, -def.len / 2 - 0.02); g.add(tl);
+  // wheels + bumpers
+  for (const [wx, wz] of [[-1, 1], [1, 1], [-1, -1], [1, -1]]) {
+    const w = new THREE.Mesh(wheelGeo, wheelMat);
+    w.rotation.z = Math.PI / 2;
+    w.position.set(wx * (def.wid / 2 - 0.05), 0.42, wz * (def.len / 2 - 0.85));
+    w.castShadow = true; g.add(w);
+    const hub = new THREE.Mesh(hubGeo, hubMat);
+    hub.rotation.z = Math.PI / 2;
+    hub.position.copy(w.position); g.add(hub);
+  }
+  const bump = new THREE.Mesh(new THREE.BoxGeometry(def.wid, 0.3, 0.25), blackMat());
+  bump.position.set(0, 0.42, def.len / 2 + 0.05); g.add(bump);
+  const bump2 = bump.clone(); bump2.position.z = -def.len / 2 - 0.05; g.add(bump2);
+  g.userData.def = def;
   return g;
 }
+function blackMat() { return new THREE.MeshStandardMaterial({ color: 0x141414, roughness: 0.6 }); }
 
-export function buildPoliceCarMesh() {
+export function makeMotorcycle() {
   const g = new THREE.Group();
-  const white = new THREE.MeshLambertMaterial({ color: 0xf5f5f5 });
-  const black = new THREE.MeshLambertMaterial({ color: 0x111111 });
-  const gold = new THREE.MeshBasicMaterial({ color: 0xffd54f });
-  const body = new THREE.Mesh(new THREE.BoxGeometry(4.6, 0.9, 2.0), white);
+  const red = new THREE.MeshStandardMaterial({ color: 0xd21f1f, roughness: 0.4, metalness: 0.3 });
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, 2.0), red);
   body.position.y = 0.75; g.add(body);
-  const hood = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.25, 1.9), black);
-  hood.position.set(1.5, 1.2, 0); g.add(hood);
-  const roof = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.25, 1.9), black);
-  roof.position.set(-0.4, 1.2, 0); g.add(roof);
-  const cab = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.7, 1.7),
-    new THREE.MeshLambertMaterial({ color: 0x10243e }));
-  cab.position.set(-0.3, 1.55, 0); g.add(cab);
-  const stripe = new THREE.Mesh(new THREE.BoxGeometry(4.6, 0.12, 0.05), gold);
-  stripe.position.set(0, 0.7, 1.02); g.add(stripe);
-  const stripe2 = stripe.clone(); stripe2.position.z = -1.02; g.add(stripe2);
-  // RED light bar on roof
-  const bar = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.25, 1.6),
-    new THREE.MeshBasicMaterial({ color: 0xff1744 }));
-  bar.position.set(-0.3, 1.95, 0); g.add(bar);
-  const bar2 = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.25, 0.5),
-    new THREE.MeshBasicMaterial({ color: 0x1565c0 }));
-  bar2.position.set(-0.3, 1.95, 0.9); g.add(bar2);
-  // square white headlights
-  const hl = new THREE.MeshBasicMaterial({ color: 0xffffff });
-  for (const s of [-1, 1]) {
-    const h = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.25, 0.4), hl);
-    h.position.set(2.32, 0.6, s * 0.65); g.add(h);
+  const seat = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.18, 0.9), blackMat());
+  seat.position.set(0, 1.05, -0.4); g.add(seat);
+  for (const wz of [0.75, -0.75]) {
+    const w = new THREE.Mesh(new THREE.TorusGeometry(0.38, 0.12, 8, 14), wheelMat);
+    w.position.set(0, 0.38, wz); g.add(w);
   }
-  const tireMat = new THREE.MeshLambertMaterial({ color: 0x111111 });
-  const wheelGeo = new THREE.CylinderGeometry(0.42, 0.42, 0.3, 10);
-  for (const [wx, wz] of [[1.4, 1.0], [1.4, -1.0], [-1.4, 1.0], [-1.4, -1.0]]) {
-    const w = new THREE.Mesh(wheelGeo, tireMat);
-    w.rotation.x = Math.PI / 2;
-    w.position.set(wx, 0.42, wz);
-    g.add(w);
-  }
+  const rider = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.9, 0.5),
+    new THREE.MeshStandardMaterial({ color: 0xff5d5d, roughness: 0.8 }));
+  rider.position.set(0, 1.55, -0.35); g.add(rider);
+  const helm = new THREE.Mesh(new THREE.SphereGeometry(0.28, 10, 8), red);
+  helm.position.set(0, 2.15, -0.3); g.add(helm);
+  g.userData.def = { name: 'RED MOTORCYCLE', color: 0xd21f1f, top: 20, len: 2.2, wid: 0.6, h: 1 };
   return g;
 }
 
-function buildMotorcycle() {
-  const g = new THREE.Group();
-  const red = new THREE.MeshLambertMaterial({ color: 0xd32f2f });
-  const body = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.5, 0.5), red);
-  body.position.y = 0.7; g.add(body);
-  const seat = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.2, 0.45),
-    new THREE.MeshLambertMaterial({ color: 0x111111 }));
-  seat.position.set(-0.3, 1.0, 0); g.add(seat);
-  const tireMat = new THREE.MeshLambertMaterial({ color: 0x111111 });
-  const wg = new THREE.CylinderGeometry(0.35, 0.35, 0.2, 10);
-  for (const wx of [0.7, -0.7]) {
-    const w = new THREE.Mesh(wg, tireMat);
-    w.rotation.x = Math.PI / 2;
-    w.position.set(wx, 0.35, 0);
-    g.add(w);
-  }
-  // rider in red
-  const rider = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.7, 0.4), red);
-  rider.position.set(-0.2, 1.4, 0); g.add(rider);
-  const helmet = new THREE.Mesh(new THREE.SphereGeometry(0.25, 8, 6), red);
-  helmet.position.set(-0.2, 1.9, 0); g.add(helmet);
-  return g;
+let traffic = [];
+let trafficTypes = ['sedan', 'taxi', 'van', 'whitevan', 'pickup', 'sedan', 'taxi', 'coupe', 'sedan', 'van'];
+
+export function initTraffic(scene, count = 26) {
+  traffic = [];
+  for (let i = 0; i < count; i++) spawnTrafficCar(scene, i);
+  return traffic;
+}
+function spawnTrafficCar(scene, i) {
+  const horiz = i % 2 === 0;
+  const line = ROAD_LINES[Math.floor(i / 2) % ROAD_LINES.length];
+  const dir = (i % 4 < 2) ? 1 : -1;
+  const lane = (dir > 0 ? 5 : -5);
+  const type = trafficTypes[i % trafficTypes.length];
+  const mesh = type === 'motorcycle' ? makeMotorcycle() : makeCarMesh(type);
+  const pos = -300 + ((i * 97) % 600);
+  mesh.position.set(horiz ? pos : line + lane, 0, horiz ? line + lane : pos);
+  mesh.rotation.y = horiz ? (dir > 0 ? Math.PI / 2 : -Math.PI / 2) : (dir > 0 ? 0 : Math.PI);
+  scene.add(mesh);
+  const car = { mesh, type, horiz, line, dir, lane, speed: 8 + (i % 5) * 2, x: mesh.position.x, z: mesh.position.z, player: false, condition: 100, health: 100 };
+  traffic.push(car);
+  return car;
 }
 
-export function buildTraffic(scene, count) {
-  const rnd = mulberry(777);
-  const group = new THREE.Group();
-  scene.add(group);
-  const cars = [];
-  const roads = [];
-  for (let c = -256; c <= 256; c += WORLD.roadGap) roads.push(c);
-  for (let i = 0; i < count; i++) {
-    const type = CAR_TYPES[Math.floor(rnd() * CAR_TYPES.length)];
-    const mesh = buildCarMesh(type);
-    const horizontal = rnd() < 0.5;
-    const road = roads[Math.floor(rnd() * roads.length)];
-    const lane = (rnd() < 0.5 ? -1 : 1) * (3 + rnd() * 4);
-    const along = -300 + rnd() * 600;
-    if (horizontal) mesh.position.set(along, 0, road + lane);
-    else mesh.position.set(road + lane, 0, along);
-    mesh.rotation.y = horizontal ? (lane > 0 ? 0 : Math.PI) : (lane > 0 ? -Math.PI / 2 : Math.PI / 2);
-    group.add(mesh);
-    cars.push({
-      mesh, type, horizontal, road, lane, along,
-      speed: 6 + rnd() * 8, dir: lane > 0 ? 1 : -1,
-      x: mesh.position.x, z: mesh.position.z,
-    });
+export function updateTraffic(dt, scene) {
+  for (const c of traffic) {
+    if (c.player) continue;
+    const sp = c.speed * dt * c.dir;
+    if (c.horiz) { c.x += sp; if (c.x > 315) c.x = -315; if (c.x < -315) c.x = 315; }
+    else { c.z += sp; if (c.z > 315) c.z = -315; if (c.z < -315) c.z = 315; }
+    c.mesh.position.x = c.x; c.mesh.position.z = c.z;
   }
-  // red motorcycle with rider
-  const moto = buildMotorcycle();
-  moto.position.set(20, 0, 64);
-  moto.rotation.y = 0;
-  group.add(moto);
-  cars.push({ mesh: moto, type: { name: 'RED MOTORCYCLE', kind: 'moto' }, horizontal: true, road: 64, lane: 0, along: 20, speed: 12, dir: 1, x: 20, z: 64 });
-
-  return {
-    group, cars,
-    update(dt) {
-      for (const c of cars) {
-        c.along += c.speed * c.dir * dt;
-        if (c.along > 310) c.along = -310;
-        if (c.along < -310) c.along = 310;
-        if (c.horizontal) { c.x = c.along; c.z = c.road + c.lane; }
-        else { c.x = c.road + c.lane; c.z = c.along; }
-        c.mesh.position.set(c.x, 0, c.z);
-      }
-    },
-    nearestCar(x, z, maxDist) {
-      let best = null, bd = maxDist * maxDist;
-      for (const c of cars) {
-        const dx = c.x - x, dz = c.z - z, d2 = dx * dx + dz * dz;
-        if (d2 < bd) { bd = d2; best = c; }
-      }
-      return best;
-    },
-  };
 }
+
+// Player car physics. car = { mesh, type, heading, speed, condition }
+export function createPlayerCar(scene, type, x, z, heading) {
+  const mesh = makeCarMesh(type);
+  mesh.position.set(x, 0, z);
+  mesh.rotation.y = heading;
+  scene.add(mesh);
+  return { mesh, type, heading, speed: 0, condition: 100, player: true };
+}
+export function updatePlayerCar(car, dt, world, input) {
+  const accel = input.isDown('KeyW') || input.isDown('ArrowUp') ? 14 : 0;
+  const brake = input.isDown('KeyS') || input.isDown('ArrowDown') ? 18 : 0;
+  car.speed += (accel - brake) * dt;
+  car.speed -= car.speed * 0.55 * dt;
+  if (Math.abs(car.speed) < 0.05 && accel === 0) car.speed = 0;
+  car.speed = Math.max(-9, Math.min(34, car.speed));
+  const steer = (input.isDown('KeyA') || input.isDown('ArrowLeft') ? 1 : 0) - (input.isDown('KeyD') || input.isDown('ArrowRight') ? 1 : 0);
+  if (Math.abs(car.speed) > 0.3) car.heading += steer * 1.7 * dt * Math.sign(car.speed);
+  const nx = car.mesh.position.x + Math.sin(car.heading) * car.speed * dt;
+  const nz = car.mesh.position.z + Math.cos(car.heading) * car.speed * dt;
+  const fixed = world.resolveCircle(nx, nz, 1.6);
+  const hitWall = Math.abs(fixed.x - nx) > 0.01 || Math.abs(fixed.z - nz) > 0.01;
+  if (hitWall && Math.abs(car.speed) > 6) {
+    car.condition = Math.max(0, car.condition - Math.abs(car.speed) * 0.35);
+    car.speed *= -0.25;
+  }
+  car.mesh.position.x = Math.max(-312, Math.min(312, fixed.x));
+  car.mesh.position.z = Math.max(-312, Math.min(312, fixed.z));
+  car.mesh.rotation.y = car.heading;
+  S.carSpeed = car.speed;
+  return hitWall;
+}
+export function carGear(speed) {
+  const a = Math.abs(speed);
+  if (a < 6) return 'G1'; if (a < 12) return 'G2'; if (a < 19) return 'G3'; if (a < 26) return 'G4'; return 'G5';
+}
+export function nearestTrafficCar(px, pz, maxD = 5) {
+  let best = null, bestD = maxD;
+  for (const c of traffic) {
+    if (c.player) continue;
+    const d = Math.hypot(c.mesh.position.x - px, c.mesh.position.z - pz);
+    if (d < bestD) { best = c; bestD = d; }
+  }
+  return best;
+}
+export function removeTrafficCar(scene, car) {
+  scene.remove(car.mesh);
+  traffic = traffic.filter((c) => c !== car);
+}
+export function getTraffic() { return traffic; }

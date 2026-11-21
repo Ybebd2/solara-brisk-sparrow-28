@@ -5,96 +5,200 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SOLARA — Vice City of the Sun</title>
 <link rel="icon" href="favicon.png">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0e1a24; font-family: Arial, Helvetica, sans-serif; color: #fff; }
+  #game, #game canvas { position: fixed; inset: 0; }
+  #hud { display: none; position: fixed; inset: 0; pointer-events: none; z-index: 5; }
+  .panel { background: rgba(8, 18, 28, 0.72); border: 1px solid rgba(255,255,255,0.18); border-radius: 8px; padding: 8px 10px; }
+  /* mission panel top-left */
+  #mission-panel { position: absolute; top: 12px; left: 12px; width: 340px; }
+  #mission-title { font-weight: bold; font-size: 14px; color: #ffd21f; letter-spacing: 0.5px; }
+  #mission-brief { font-size: 12px; color: #dfe9f2; margin-top: 3px; line-height: 1.35; }
+  #mission-meta { display: flex; gap: 10px; margin-top: 6px; font-size: 11px; color: #9fc3d8; }
+  #mission-stage { color: #ffd21f; font-weight: bold; }
+  #mission-bar-wrap { height: 6px; background: rgba(255,255,255,0.15); border-radius: 3px; margin-top: 6px; overflow: hidden; }
+  #mission-bar { height: 100%; width: 0%; background: #ffd21f; }
+  /* top-right cluster */
+  #top-right { position: absolute; top: 12px; right: 12px; text-align: right; }
+  #cash { font-size: 26px; font-weight: bold; color: #4fc3f7; text-shadow: 0 2px 4px rgba(0,0,0,0.6); }
+  #rank { font-size: 12px; color: #ffd21f; margin-top: 2px; }
+  #clock { font-size: 13px; color: #fff; margin-top: 2px; }
+  #stars { font-size: 22px; letter-spacing: 3px; margin-top: 2px; }
+  .star { color: #3a4a58; -webkit-text-stroke: 1px #111; }
+  .star.lit { color: #ffd21f; text-shadow: 0 0 8px rgba(255,210,31,0.8); }
+  #geckos { font-size: 12px; color: #ffd21f; margin-top: 2px; }
+  /* health / armour bottom-left above minimap */
+  #vitals { position: absolute; left: 12px; bottom: 196px; width: 210px; }
+  .bar-row { display: flex; align-items: center; gap: 6px; margin-top: 4px; font-size: 11px; }
+  .bar { flex: 1; height: 10px; background: rgba(255,255,255,0.15); border-radius: 5px; overflow: hidden; }
+  #health-fill { height: 100%; background: #3ddc5f; width: 100%; }
+  #armour-fill { height: 100%; background: #4fc3f7; width: 40%; }
+  /* minimap */
+  #minimap-wrap { position: absolute; left: 12px; bottom: 12px; }
+  #minimap { border-radius: 50%; border: 2px solid rgba(255,255,255,0.7); background: #0e1a24; }
+  #district-label { position: absolute; left: 190px; bottom: 22px; font-size: 12px; font-weight: bold; color: #fff; text-shadow: 0 1px 3px #000; }
+  /* weapon slots bottom-right */
+  #slots { position: absolute; right: 12px; bottom: 12px; display: flex; gap: 5px; }
+  .slot { width: 74px; padding: 5px 6px; background: rgba(8,18,28,0.72); border: 1px solid rgba(255,255,255,0.2); border-radius: 6px; font-size: 10px; opacity: 0.65; }
+  .slot.active { opacity: 1; border-color: #ffd21f; box-shadow: 0 0 8px rgba(255,210,31,0.5); }
+  .slot-num { color: #ffd21f; font-weight: bold; margin-right: 4px; }
+  .slot-ammo { float: right; color: #9fc3d8; }
+  #ammo { position: absolute; right: 12px; bottom: 74px; font-size: 20px; font-weight: bold; text-shadow: 0 2px 4px #000; }
+  /* vehicle HUD */
+  #vehicle-hud { display: none; position: absolute; right: 12px; bottom: 108px; width: 250px; text-align: right; }
+  #car-name { font-size: 15px; font-weight: bold; }
+  #car-cond-wrap { height: 8px; background: rgba(255,255,255,0.15); border-radius: 4px; margin: 5px 0; overflow: hidden; }
+  #car-cond { height: 100%; background: #3ddc5f; width: 100%; }
+  #car-speed { font-size: 26px; font-weight: bold; }
+  #car-gear { display: inline-block; background: #ffd21f; color: #111; font-weight: bold; font-size: 12px; padding: 2px 7px; border-radius: 4px; margin-left: 8px; }
+  #radio { font-size: 12px; color: #ff8fd0; margin-top: 4px; }
+  /* police response panel top-center */
+  #police-panel { display: none; position: absolute; top: 12px; left: 50%; transform: translateX(-50%); width: 330px; }
+  #police-title { font-size: 13px; font-weight: bold; color: #ffb74d; }
+  .unit { display: flex; justify-content: space-between; font-size: 12px; margin-top: 3px; }
+  .unit-name { font-weight: bold; }
+  .unit-searching { color: #dfe9f2; } .unit-pursuit { color: #ff9f1a; } .unit-firing { color: #ff4444; font-weight: bold; }
+  .unit-wrecked { color: #888; } .unit-airborne { color: #4fc3f7; }
+  #air-unit { display: none; color: #ffd21f; font-weight: bold; font-size: 12px; margin-top: 5px; text-align: center; }
+  .badge { display: none; position: absolute; top: 148px; left: 50%; transform: translateX(-50%); font-size: 13px; font-weight: bold; padding: 4px 12px; border-radius: 4px; }
+  .badge.hidden { background: #1a6fd4; } .badge.sight { background: #d21f1f; }
+  /* message + hint */
+  #message { position: absolute; bottom: 220px; left: 50%; transform: translateX(-50%); font-size: 17px; font-weight: bold; color: #ffd21f; text-shadow: 0 2px 4px #000; opacity: 0; transition: opacity 0.3s; white-space: nowrap; }
+  #hint { position: absolute; bottom: 2px; left: 50%; transform: translateX(-50%); font-size: 11px; color: rgba(255,255,255,0.6); white-space: nowrap; }
+  /* dialogue */
+  #dialogue { display: none; position: absolute; bottom: 250px; left: 50%; transform: translateX(-50%); width: 560px; background: rgba(8,18,28,0.85); border: 1px solid #ff6ec7; border-radius: 10px; padding: 12px 14px; }
+  #dlg-speaker { font-size: 14px; font-weight: bold; color: #ff6ec7; }
+  #dlg-role { font-size: 11px; color: #9fc3d8; margin-left: 8px; }
+  #dlg-text { font-size: 14px; margin-top: 6px; line-height: 1.4; }
+  #dlg-reply { font-size: 13px; color: #7cfc98; margin-top: 6px; }
+  /* wasted */
+  #wasted { display: none; position: fixed; inset: 0; z-index: 20; flex-direction: column; align-items: center; justify-content: center; background: rgba(0,0,0,0.45); }
+  .wasted-big { font-size: 110px; font-weight: bold; letter-spacing: 12px; color: #e8e8e8; text-shadow: 0 0 30px rgba(255,255,255,0.5); }
+  #wasted-sub { font-size: 18px; color: #ffd21f; margin-top: 8px; }
+  /* start screen */
+  #start-screen { position: fixed; inset: 0; z-index: 30; display: flex; flex-direction: column; align-items: center; justify-content: center; background: linear-gradient(180deg, rgba(10,20,40,0.25), rgba(10,20,40,0.75)); }
+  #start-screen h1 { font-size: 84px; letter-spacing: 14px; color: #ffd21f; text-shadow: 0 4px 24px rgba(0,0,0,0.7); }
+  #start-screen .sub { font-size: 18px; color: #7cfc98; letter-spacing: 4px; margin-top: 4px; }
+  #start-screen .tag { font-size: 13px; color: #dfe9f2; margin-top: 14px; }
+  .menu-btn { pointer-events: auto; cursor: pointer; margin-top: 12px; padding: 12px 42px; font-size: 17px; font-weight: bold; letter-spacing: 2px; color: #111; background: #ffd21f; border: none; border-radius: 8px; }
+  .menu-btn.alt { background: rgba(255,255,255,0.16); color: #fff; border: 1px solid rgba(255,255,255,0.4); }
+  /* pause menu */
+  #pause-menu { display: none; position: fixed; inset: 0; z-index: 25; background: rgba(6,14,22,0.92); flex-direction: column; align-items: center; padding: 30px; pointer-events: auto; }
+  #pause-menu h1 { font-size: 34px; letter-spacing: 6px; color: #ffd21f; }
+  .pause-tabs { display: flex; gap: 6px; margin: 18px 0; flex-wrap: wrap; justify-content: center; }
+  .pause-tab { cursor: pointer; padding: 8px 16px; font-size: 13px; font-weight: bold; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.25); border-radius: 6px; color: #dfe9f2; }
+  .pause-tab.active { background: #ffd21f; color: #111; }
+  .pause-page { display: none; width: 640px; max-width: 92vw; max-height: 62vh; overflow-y: auto; }
+  .pause-page h2 { font-size: 16px; color: #4fc3f7; margin-bottom: 10px; }
+  .story-row { display: flex; gap: 10px; padding: 7px 4px; border-bottom: 1px solid rgba(255,255,255,0.1); font-size: 13px; }
+  .story-row.done { opacity: 0.55; } .story-row.current { background: rgba(255,210,31,0.12); }
+  .story-check { color: #7cfc98; width: 18px; } .story-title { flex: 1; font-weight: bold; }
+  .story-contact { color: #ff6ec7; } .story-reward { color: #ffd21f; }
+  .stat-row { display: flex; justify-content: space-between; padding: 6px 2px; border-bottom: 1px solid rgba(255,255,255,0.08); font-size: 13px; }
+  .crew-row { padding: 10px 4px; border-bottom: 1px solid rgba(255,255,255,0.1); font-size: 13px; }
+  .crew-row span { display: block; color: #9fc3d8; margin-top: 2px; }
+  .crew-key { color: #ffd21f !important; }
+  #map-canvas { background: #0e1a24; border-radius: 8px; }
+  .ctl-row { display: flex; justify-content: space-between; padding: 5px 2px; font-size: 13px; border-bottom: 1px solid rgba(255,255,255,0.08); }
+</style>
 <script type="importmap">
 { "imports": { "three": "./vendor/three/three.module.min.js" } }
 </script>
-<style>
-  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #0a141e; font-family: 'Segoe UI', Arial, sans-serif; color: #fff; }
-  #app { position: fixed; inset: 0; }
-  #app canvas { display: block; }
-  #hud { display: none; position: fixed; inset: 0; pointer-events: none; z-index: 5; }
-  .panel { background: rgba(8, 18, 28, 0.78); border: 1px solid rgba(255, 213, 79, 0.4); border-radius: 8px; padding: 8px 12px; }
-  #mission-panel { position: absolute; top: 12px; left: 12px; max-width: 420px; }
-  #mission-title { font-weight: 700; font-size: 15px; color: #ffd54f; }
-  #mission-stage { font-size: 12px; color: #4fc3f7; margin-top: 2px; }
-  #mission-progress .seg { display: inline-block; width: 26px; height: 6px; background: #37474f; margin-right: 3px; border-radius: 3px; }
-  #mission-progress .seg.filled { background: #ffd54f; }
-  #mission-dist, #mission-timer { font-size: 12px; color: #cfd8dc; margin-top: 2px; }
-  #stats-top { position: absolute; top: 12px; right: 12px; text-align: right; }
-  #cash { font-size: 22px; font-weight: 800; color: #69f0ae; }
-  #clock { font-size: 14px; color: #e0f2f1; }
-  #rank { font-size: 12px; color: #4fc3f7; }
-  #stars .star { font-size: 20px; color: #37474f; -webkit-text-stroke: 1px #000; }
-  #stars .star.lit { color: #ffd54f; }
-  #police-panel { position: absolute; top: 110px; left: 50%; transform: translateX(-50%); min-width: 300px; text-align: center; }
-  #police-head { font-weight: 700; font-size: 13px; color: #ff8a80; }
-  #police-units .unit { font-size: 12px; color: #eceff1; }
-  #police-units .unit.pursuit { color: #ffb74d; }
-  #police-units .unit.firing { color: #ff5252; }
-  #police-units .unit.wrecked { color: #90a4ae; }
-  #air-unit { color: #ffd54f; font-weight: 700; font-size: 12px; margin-top: 4px; }
-  #stealth-badge { position: absolute; top: 190px; left: 50%; transform: translateX(-50%); padding: 4px 14px; border-radius: 20px; font-weight: 800; font-size: 13px; }
-  #stealth-badge.hidden { background: #1565c0; }
-  #stealth-badge.in-sight { background: #c62828; }
-  #bars { position: absolute; bottom: 170px; right: 12px; width: 220px; }
-  .bar-row { display: flex; align-items: center; gap: 6px; font-size: 11px; margin-top: 4px; }
-  .bar { flex: 1; height: 10px; background: #37474f; border-radius: 5px; overflow: hidden; }
-  #health-bar { height: 100%; background: #66bb6a; width: 100%; }
-  #armour-bar { height: 100%; background: #42a5f5; width: 40%; }
-  #weapon-slots { position: absolute; bottom: 12px; right: 12px; display: flex; gap: 6px; }
-  .slot { background: rgba(8,18,28,0.78); border: 1px solid #546e7a; border-radius: 6px; padding: 6px 8px; font-size: 12px; }
-  .slot.sel { border-color: #ffd54f; background: rgba(255,213,79,0.2); }
-  .slot b { color: #ffd54f; }
-  #vehicle-hud { position: absolute; bottom: 70px; right: 12px; text-align: right; background: rgba(8,18,28,0.78); border: 1px solid rgba(255,213,79,0.4); border-radius: 8px; padding: 8px 12px; }
-  #car-name { font-weight: 800; font-size: 15px; }
-  #car-speed { font-size: 24px; font-weight: 800; color: #fff; }
-  #car-gear { display: inline-block; background: #ffd54f; color: #000; font-weight: 800; padding: 2px 8px; border-radius: 4px; }
-  #car-radio { font-size: 12px; color: #ce93d8; }
-  #car-cond { height: 100%; background: #66bb6a; }
-  #minimap-wrap { position: absolute; bottom: 12px; left: 12px; }
-  #minimap { border-radius: 50%; border: 2px solid rgba(255,255,255,0.5); }
-  #district-label { text-align: center; font-size: 12px; color: #fff; text-shadow: 0 1px 2px #000; margin-top: 4px; }
-  #message { position: absolute; bottom: 210px; left: 50%; transform: translateX(-50%); font-size: 18px; font-weight: 700; color: #ffd54f; text-shadow: 0 2px 4px #000; }
-  #dialogue { position: absolute; bottom: 250px; left: 50%; transform: translateX(-50%); width: 560px; background: rgba(8,18,28,0.85); border: 1px solid #e040fb; border-radius: 10px; padding: 12px 16px; }
-  #dialogue-speaker { font-weight: 800; color: #f48fb1; font-size: 13px; }
-  #dialogue-text { font-size: 15px; margin-top: 4px; }
-  #dialogue-reply { font-size: 13px; color: #4fc3f7; margin-top: 6px; font-style: italic; }
-  #wasted { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; flex-direction: column; background: rgba(0,0,0,0.55); z-index: 20; font-size: 84px; font-weight: 900; color: #fff; letter-spacing: 6px; text-shadow: 0 4px 0 #c62828; }
-  #wasted-sub { font-size: 18px; letter-spacing: 1px; margin-top: 12px; color: #ffccbc; }
-  #gecko-counter { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); font-size: 13px; color: #ffd700; }
-  #crosshair { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 26px; color: #ff5252; display: none; }
-  #start-screen { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 10; background: linear-gradient(180deg, rgba(10,20,40,0.25), rgba(10,20,40,0.75)); }
-  #start-screen h1 { font-size: 64px; margin: 0; letter-spacing: 4px; color: #ffd54f; text-shadow: 0 4px 0 #e040fb, 0 8px 24px #000; }
-  #start-screen h2 { font-size: 20px; color: #4fc3f7; margin: 6px 0 24px; letter-spacing: 2px; }
-  #start-screen button { pointer-events: auto; font-size: 20px; font-weight: 800; padding: 14px 44px; margin: 6px; border: none; border-radius: 10px; background: #ffd54f; color: #111; cursor: pointer; }
-  #start-screen button:hover { background: #ffea00; }
-  #start-screen .sub { margin-top: 18px; font-size: 13px; color: #cfd8dc; text-shadow: 0 1px 2px #000; }
-  #pause-menu { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; z-index: 15; background: rgba(0,0,0,0.6); }
-  .pause-card { background: rgba(8,18,28,0.95); border: 1px solid #ffd54f; border-radius: 12px; padding: 24px 32px; max-width: 640px; max-height: 85vh; overflow: auto; }
-  .pause-card h2 { margin: 0 0 8px; color: #ffd54f; }
-  .pause-card .tabs { font-size: 13px; color: #4fc3f7; margin-bottom: 12px; }
-  .pause-card h3 { color: #69f0ae; margin: 14px 0 6px; }
-  .story-row { font-size: 14px; padding: 3px 0; }
-  .story-row.done { color: #81c784; }
-  .story-row.cur { color: #ffd54f; font-weight: 700; }
-  .stats { font-size: 13px; line-height: 1.7; }
-  #map-overlay { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; z-index: 14; background: rgba(0,0,0,0.65); color: #fff; font-size: 18px; }
-</style>
 </head>
 <body>
-<div id="app"></div>
-<div id="hud"></div>
+<div id="game"></div>
+
+<div id="hud">
+  <div id="mission-panel" class="panel">
+    <div id="mission-title">NEXT: FIRST FIX — LUPE</div>
+    <div id="mission-brief">Meet Lupe at MO'S on Neon Row. She has your first job.</div>
+    <div id="mission-meta"><span id="mission-stage">STAGE 0/1</span><span id="mission-dist"></span><span id="mission-timer"></span></div>
+    <div id="mission-bar-wrap"><div id="mission-bar"></div></div>
+  </div>
+  <div id="top-right">
+    <div id="cash">$250</div>
+    <div id="rank">ROOKIE · 0/8</div>
+    <div id="clock">14:00</div>
+    <div id="stars"></div>
+    <div id="geckos">🦎 0/20</div>
+  </div>
+  <div id="police-panel" class="panel">
+    <div id="police-title">PCPD RESPONSE</div>
+    <div id="police-units"></div>
+    <div id="air-unit">✈ AIR UNIT DEPLOYED</div>
+  </div>
+  <div id="stealth-badge" class="badge hidden"></div>
+  <div id="vitals" class="panel">
+    <div class="bar-row"><span>HEALTH</span><div class="bar"><div id="health-fill"></div></div><span id="health-num">100 / 40</span></div>
+    <div class="bar-row"><span>ARMOUR</span><div class="bar"><div id="armour-fill"></div></div></div>
+  </div>
+  <div id="minimap-wrap"><canvas id="minimap" width="168" height="168"></canvas></div>
+  <div id="district-label">DOWNTOWN · NEUTRAL 30</div>
+  <div id="ammo">12 / 48</div>
+  <div id="vehicle-hud" class="panel">
+    <div id="car-name">VELOZ COMET RS</div>
+    <div id="car-cond-wrap"><div id="car-cond"></div></div>
+    <div><span id="car-speed">0 KM/H</span><span id="car-gear">G1</span></div>
+    <div id="radio">♪ PUERTO 88.3</div>
+  </div>
+  <div id="slots"></div>
+  <div id="message"></div>
+  <div id="dialogue"><span id="dlg-speaker"></span><span id="dlg-role"></span><div id="dlg-text"></div><div id="dlg-reply"></div></div>
+  <div id="hint"></div>
+</div>
+
+<div id="wasted"><div class="wasted-big">WASTED</div><div id="wasted-sub"></div></div>
+
 <div id="start-screen">
   <h1>SOLARA</h1>
-  <h2>VICE CITY OF THE SUN</h2>
-  <button id="start-btn">NEW GAME</button>
-  <button id="load-btn">LOAD GAME</button>
-  <button onclick="document.getElementById('start-screen').style.display='none'">SETTINGS</button>
-  <div class="sub">WASD move · Shift sprint · Space jump · E mission · F enter/exit car · R reload · 1–5 weapons · Q radio · M map · F9 autopilot · Z/X/C crew · Esc pause</div>
-  <div class="sub">Everything here is made in code: city, cars, people, music.</div>
+  <div class="sub">VICE CITY OF THE SUN</div>
+  <div class="tag">An open-world crime story · 8 jobs · 7 districts · 20 Golden Geckos</div>
+  <button class="menu-btn" id="start-btn">NEW GAME</button>
+  <button class="menu-btn alt" id="load-btn">LOAD GAME</button>
+  <button class="menu-btn alt" onclick="document.getElementById('start-screen').style.opacity=0.85">SETTINGS</button>
 </div>
-<div id="pause-menu"></div>
-<div id="map-overlay">MAP — 7 districts · click waypoint (M to close)</div>
+
+<div id="pause-menu">
+  <h1>PAUSED</h1>
+  <div class="pause-tabs">
+    <button class="pause-tab" data-tab="map">MAP</button>
+    <button class="pause-tab" data-tab="story">STORY</button>
+    <button class="pause-tab" data-tab="stats">STATS</button>
+    <button class="pause-tab" data-tab="crew">CREW</button>
+    <button class="pause-tab" data-tab="settings">SETTINGS</button>
+    <button class="pause-tab" data-tab="controls">CONTROLS</button>
+    <button class="pause-tab" data-tab="save">SAVE</button>
+  </div>
+  <div class="pause-page" id="tab-map"><canvas id="map-canvas" width="560" height="420"></canvas></div>
+  <div class="pause-page" id="tab-story"></div>
+  <div class="pause-page" id="tab-stats"></div>
+  <div class="pause-page" id="tab-crew"></div>
+  <div class="pause-page" id="tab-settings">
+    <h2>SETTINGS</h2>
+    <div class="ctl-row"><span>Sound</span><button class="menu-btn alt" id="sound-btn" style="margin:0;padding:6px 16px;font-size:13px">SOUND: ON</button></div>
+    <div class="ctl-row"><span>HUD density</span><button class="menu-btn alt" id="density-btn" style="margin:0;padding:6px 16px;font-size:13px">HUD DENSITY: FULL</button></div>
+  </div>
+  <div class="pause-page" id="tab-controls">
+    <h2>CONTROLS</h2>
+    <div class="ctl-row"><span>Move / sprint / jump</span><b>WASD · Shift · Space</b></div>
+    <div class="ctl-row"><span>Camera</span><b>Mouse drag</b></div>
+    <div class="ctl-row"><span>Enter / exit car</span><b>F</b></div>
+    <div class="ctl-row"><span>Start job / interact</span><b>E</b></div>
+    <div class="ctl-row"><span>Shoot / reload</span><b>Click · R</b></div>
+    <div class="ctl-row"><span>Weapons 1–5</span><b>1–5</b></div>
+    <div class="ctl-row"><span>Radio</span><b>Q</b></div>
+    <div class="ctl-row"><span>Map / pause</span><b>M · Esc</b></div>
+    <div class="ctl-row"><span>Autopilot</span><b>F9</b></div>
+    <div class="ctl-row"><span>Crew: Mara / Sully / Kiki</span><b>Z · X · C</b></div>
+  </div>
+  <div class="pause-page" id="tab-save">
+    <h2>SAVE GAME</h2>
+    <button class="menu-btn" id="save-btn">SAVE GAME</button>
+    <button class="menu-btn alt" id="load-btn2">LOAD GAME</button>
+  </div>
+</div>
+
 <script type="module" src="./src/main.js"></script>
 </body>
 </html>

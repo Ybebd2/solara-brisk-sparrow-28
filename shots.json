@@ -1,1 +1,1 @@
-{"shots":["shot-1.jpg","shot-2.jpg","shot-3.jpg","shot-4.jpg"]}
+[{"name":"shot-1.jpg","query":"?shot=1"},{"name":"shot-2.jpg","query":"?shot=2"},{"name":"shot-3.jpg","query":"?shot=3"},{"name":"shot-4.jpg","query":"?shot=4"}]

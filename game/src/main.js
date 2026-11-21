@@ -1,289 +1,314 @@
-// SOLARA R10 — main.js
-// Entrypoint: renderer, camera, lights, game loop, car enter/exit,
-// autopilot (F9), map (M), pause (Esc), crew abilities (Z/X/C),
-// radio (Q), Gecko collection, debug API window.__solara.
+// SOLARA R10 — main: entrypoint, loop, camera, car enter/exit, crew, peds, debug API.
 import * as THREE from 'three';
-import { makeState, WORLD, DISTRICTS, MISSIONS, rankFor } from './config.js';
-import { createInput } from './input.js';
-import { buildWorld, districtAt } from './world.js';
-import { buildTraffic } from './vehicles.js';
-import { createPlayer } from './player.js';
-import { createPolice } from './police.js';
-import { createMissions } from './missions.js';
-import { buildHUD } from './hud.js';
-import { applyShot, shotCamera } from './shots.js';
-import { ensureAudio, updateRadio, playPickup } from './audio.js';
+import { S, DISTRICTS, WEAPONS, RADIO } from './config.js';
+import { initInput, isDown, wasPressed, consumeMouse, consumeClick, endFrame } from './input.js';
+import { initWorld } from './world.js';
+import { initTraffic, updateTraffic, createPlayerCar, updatePlayerCar, nearestTrafficCar, removeTrafficCar, getTraffic } from './vehicles.js';
+import { initPlayer, updatePlayer, reload, switchWeapon, updateWeaponMesh, playerGroup } from './player.js';
+import { initPolice, updatePolice, setWanted, addWanted, shootableTargets, policeCount, getCruisers, getOfficers, hurtPlayer } from './police.js';
+import { initMissions, tryStartMission, updateMissions, missionTargetPos } from './missions.js';
+import { initHUD, updateHUD, showDialogue, togglePause, startGame } from './hud.js';
+import { initAudio, updateAudio, playPickup } from './audio.js';
+import { shotNumber, applyShot } from './shots.js';
 
-const params = new URLSearchParams(location.search);
-const shotNum = parseInt(params.get('shot') || '0', 10);
+window.addEventListener('error', (e) => { window.__solaraError = String(e.message || e.error); });
 
-const S = makeState();
-window.__districts = DISTRICTS;
-
-const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setSize(innerWidth, innerHeight);
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
 renderer.shadowMap.enabled = true;
-document.getElementById('app').appendChild(renderer.domElement);
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+document.getElementById('game').appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x87ceeb); // bright blue daytime sky
-scene.fog = new THREE.Fog(0x87ceeb, 200, 700);
+const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.1, 1200);
+camera.position.set(-60, 12, 90);
 
-const camera = new THREE.PerspectiveCamera(65, innerWidth / innerHeight, 0.1, 1200);
-camera.position.set(-40, 8, 80);
+const world = initWorld(scene);
+initInput(renderer.domElement);
+initPlayer(scene);
+initTraffic(scene, 26);
+initPolice(scene, world);
+initMissions(world, showDialogue);
+initHUD();
+window.__solaraDistricts = DISTRICTS;
 
-// Lights: bright sun + ambient (daytime, long sharp shadows)
-const sun = new THREE.DirectionalLight(0xfff2cc, 1.6);
-sun.position.set(120, 180, 60);
-sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
-sun.shadow.camera.left = -200; sun.shadow.camera.right = 200;
-sun.shadow.camera.top = 200; sun.shadow.camera.bottom = -200;
-scene.add(sun);
-scene.add(new THREE.AmbientLight(0xbfd9ff, 0.75));
-const hemi = new THREE.HemisphereLight(0xbfd9ff, 0x8a7a5a, 0.5);
-scene.add(hemi);
-
-const world = buildWorld(scene, S);
-const traffic = buildTraffic(scene, 26);
-const player = createPlayer(scene, S);
-const police = createPolice(scene, S);
-const missions = createMissions(scene, S);
-const input = createInput(renderer.domElement);
-const hud = buildHUD(S, missions, police);
-
-// expose geckos for minimap + collection
-window.__geckos = world.geckos;
-
-// spawn player car helper (used by shots + F enter)
-function spawnPlayerCar() {
-  const t = traffic.nearestCar(S.px, S.pz, 60) || traffic.cars[0];
-  return t;
+// ---- peds: 96, scale 1.5, bright shirts, in groups of 4 ----
+const peds = [];
+const SHIRTS = [0xffd21f, 0xff5d8f, 0x2ec4d8, 0x7cfc98, 0xff8c1a, 0xe040fb, 0xffffff, 0x69f0ae, 0xff5252, 0x4fc3f7];
+function initPeds() {
+  for (let g = 0; g < 24; g++) {
+    const line = [-256, -192, -128, -64, 0, 64, 128, 192, 256][g % 9];
+    const horiz = g % 2 === 0;
+    const along = -280 + ((g * 53) % 560);
+    const cx = horiz ? along : line + (g % 4 < 2 ? 13.5 : -13.5);
+    const cz = horiz ? line + (g % 4 < 2 ? 13.5 : -13.5) : along;
+    for (let k = 0; k < 4; k++) {
+      const grp = new THREE.Group();
+      const shirt = new THREE.MeshStandardMaterial({ color: SHIRTS[(g * 4 + k) % SHIRTS.length], roughness: 0.85 });
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.7, 0.34), shirt);
+      body.position.y = 0.78; body.castShadow = true; grp.add(body);
+      const head = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.32, 0.3),
+        new THREE.MeshStandardMaterial({ color: [0xc98d64, 0x8a5a3b, 0xe8b98a][(g + k) % 3], roughness: 0.8 }));
+      head.position.y = 1.3; grp.add(head);
+      const legs = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.5, 0.3),
+        new THREE.MeshStandardMaterial({ color: 0x22222e, roughness: 0.9 }));
+      legs.position.y = 0.25; grp.add(legs);
+      grp.scale.setScalar(1.5);
+      const x = cx + (Math.random() - 0.5) * 6, z = cz + (Math.random() - 0.5) * 6;
+      grp.position.set(x, 0, z);
+      grp.rotation.y = Math.random() * Math.PI * 2;
+      scene.add(grp);
+      peds.push({ mesh: grp, x, z, heading: Math.random() * Math.PI * 2, speed: 1.1 + Math.random() * 0.5, turnT: 0, dead: false, phase: Math.random() * 6 });
+    }
+  }
+}
+initPeds();
+function updatePeds(dt) {
+  for (const p of peds) {
+    if (p.dead) continue;
+    p.turnT -= dt;
+    const dp = Math.hypot(S.px - p.x, S.pz - p.z);
+    let fleeing = false;
+    if ((S.wanted > 0 && dp < 16) || dp < 4) {
+      p.heading = Math.atan2(p.x - S.px, p.z - S.pz);
+      fleeing = true;
+    } else if (p.turnT <= 0) {
+      p.heading += (Math.random() - 0.5) * 1.6;
+      p.turnT = 2 + Math.random() * 3;
+    }
+    const sp = fleeing ? 4.6 : p.speed;
+    const nx = p.x + Math.sin(p.heading) * sp * dt;
+    const nz = p.z + Math.cos(p.heading) * sp * dt;
+    // peds stay on the sidewalks — never wander onto the road
+    if (!fleeing && world.isOnRoad(nx, nz)) { p.heading += Math.PI / 2; p.turnT = 0.5; }
+    else if (Math.abs(nx) < 310 && Math.abs(nz) < 310) { p.x = nx; p.z = nz; }
+    else p.heading += Math.PI / 2;
+    p.mesh.position.x = p.x; p.mesh.position.z = p.z;
+    p.mesh.rotation.y = p.heading;
+    p.mesh.position.y = Math.abs(Math.sin(S.time * 8 + p.phase)) * 0.08;
+  }
+}
+function pedTargets() {
+  return peds.filter((p) => !p.dead).map((p) => ({
+    x: p.x, z: p.z, health: 30,
+    onHit: () => {
+      if (p.dead) return;
+      p.dead = true;
+      p.mesh.rotation.x = -Math.PI / 2;
+      p.mesh.position.y = 0.4;
+      addWanted(1);
+      S.message = 'PEDESTRIAN DOWN — the cops saw that';
+      S.messageUntil = S.time + 2.5;
+      setTimeout(() => { scene.remove(p.mesh); }, 4000);
+    },
+  }));
 }
 
-let camYaw = Math.PI * 0.75, camPitch = 0.35, camDist = 11;
-let carCondition = 100;
-let paused = false;
+// ---- camera ----
+let camYaw = Math.PI * 0.75, camPitch = 0.32, camDist = 8;
+let menuAngle = 0.6;
+let lastCar = null; // abandoned player car, re-enterable
 
-function togglePause() {
-  S.paused = !S.paused;
-  paused = S.paused;
-  document.getElementById('pause-menu').style.display = paused ? 'flex' : 'none';
-  if (paused) renderPauseMenu();
-}
-function renderPauseMenu() {
-  const el = document.getElementById('pause-menu');
-  const story = missions.storyList().map(m =>
-    `<div class="story-row ${m.done ? 'done' : ''} ${m.current ? 'cur' : ''}">${m.done ? '✓' : (m.current ? '▶' : '·')} ${m.idx + 1}. ${m.title} (${m.contact}) $${m.reward} · ${m.stages} stage${m.stages > 1 ? 's' : ''}</div>`
-  ).join('');
-  const stats = `
-    CASH $${Math.round(S.cash)} · RESPECT ${S.respect} · DISTRICTS HELD ${S.districtsHeld}/7<br>
-    GOLDEN GECKOS ${S.geckos}/20 · STUNT JUMPS ${S.stuntJumps}/5 · RACES WON ${S.racesWon}<br>
-    CARS STOLEN ${S.carsJacked} · SAFEHOUSES ${S.safehouses}/3 · BEST WANTED ${S.bestWanted} STARS<br>
-    POLICE ESCAPES ${S.escapes} · CRUISERS WRECKED ${S.cruisersWrecked} · HELICOPTERS DOWNED ${S.helisDowned}<br>
-    TIMES BUSTED ${S.busted} · TIMES WASTED ${S.wasted}`;
-  el.innerHTML = `
-    <div class="pause-card">
-      <h2>PAUSED — SOLARA</h2>
-      <div class="tabs"><b>MAP</b> · <b>STORY</b> · <b>STATS</b> · <b>CREW</b> · <b>SETTINGS</b> · <b>CONTROLS</b> · <b>SAVE</b></div>
-      <h3>STORY — 8 MISSIONS</h3><div>${story}</div>
-      <h3>STATS</h3><div class="stats">${stats}</div>
-      <h3>CREW</h3><div>Z MARA · GHOST (−1★) ${S.crewCd.MARA > 0 ? 'CD ' + Math.ceil(S.crewCd.MARA) + 's' : 'READY'}<br>
-      X SULLY · PIT CREW (repair) ${S.crewCd.SULLY > 0 ? 'CD ' + Math.ceil(S.crewCd.SULLY) + 's' : 'READY'}<br>
-      C KIKI · LOOKOUT (20s) ${S.crewCd.KIKI > 0 ? 'CD ' + Math.ceil(S.crewCd.KIKI) + 's' : 'READY'}</div>
-      <p>Esc resume · M map · F9 autopilot</p>
-    </div>`;
-}
-
-// start screen
-const startBtn = document.getElementById('start-btn');
-if (startBtn) startBtn.addEventListener('click', () => {
-  ensureAudio(S);
-  S.started = true;
-  document.getElementById('start-screen').style.display = 'none';
-  document.getElementById('hud').style.display = 'block';
-});
-const loadBtn = document.getElementById('load-btn');
-if (loadBtn) loadBtn.addEventListener('click', () => {
-  ensureAudio(S);
-  S.started = true;
-  document.getElementById('start-screen').style.display = 'none';
-  document.getElementById('hud').style.display = 'block';
-});
-
-// apply staged shot before first frame
-let shotCam = null;
-if (shotNum >= 1 && shotNum <= 4) {
-  shotCam = applyShot(shotNum, S, { traffic, police, missions, player });
-  if (shotNum === 1) {
-    document.getElementById('start-screen').style.display = 'flex';
+function updateCamera(dt) {
+  if (S.shotMode) return; // staged shot cameras stay fixed
+  if (!S.started) {
+    menuAngle += dt * 0.05;
+    camera.position.set(Math.sin(menuAngle) * 130, 42, Math.cos(menuAngle) * 130);
+    camera.lookAt(0, 12, 0);
+    return;
+  }
+  const md = consumeMouse();
+  camYaw -= md.dx * 0.004;
+  camPitch = Math.max(0.05, Math.min(1.1, camPitch + md.dy * 0.003));
+  let tx, tz, ty;
+  if (S.inCar && S.car) {
+    tx = S.car.mesh.position.x; tz = S.car.mesh.position.z; ty = 2.2;
+    camYaw = S.car.heading + Math.PI;
+    camDist = 11;
   } else {
-    document.getElementById('start-screen').style.display = 'none';
-    document.getElementById('hud').style.display = 'block';
+    tx = S.px; tz = S.pz; ty = 1.6;
+    camDist = 8;
   }
-  // let police spawn for the shot
-  police.update(0.5, 0.5);
-  police.update(0.5, 1.0);
-  if (shotNum === 4) police.update(0.5, 1.5);
-  // mission dialogue for shot 3
-  if (shotNum === 3) missions.startMission();
-  if (shotNum === 4) missions.startMission();
+  const cx = tx - Math.sin(camYaw) * Math.cos(camPitch) * camDist;
+  const cz = tz - Math.cos(camYaw) * Math.cos(camPitch) * camDist;
+  const cy = ty + Math.sin(camPitch) * camDist;
+  camera.position.set(cx, cy, cz);
+  camera.lookAt(tx, ty + 0.6, tz);
 }
 
-const clock = new THREE.Clock();
-let frames = 0;
-
-function animate() {
-  requestAnimationFrame(animate);
-  const dt = Math.min(0.05, clock.getDelta());
-  const t = clock.elapsedTime;
-  frames++;
-
-  // input: pause / map / radio / crew / autopilot
-  if (input.wasPressed('Escape')) togglePause();
-  if (input.wasPressed('KeyM')) { S.mapOpen = !S.mapOpen; document.getElementById('map-overlay').style.display = S.mapOpen ? 'flex' : 'none'; }
-  if (input.wasPressed('KeyQ')) { S.station = (S.station + 1) % 4; S.message = 'RADIO ' + ['PUERTO 88.3', 'CELESTE 98.1', 'SOLARA 98.3', 'NEON 101.5'][S.station]; S.messageUntil = S.time + 2; }
-  if (input.wasPressed('F9')) { S.autopilot = !S.autopilot; S.message = S.autopilot ? 'AUTOPILOT ON' : 'AUTOPILOT OFF'; S.messageUntil = S.time + 2; }
-  if (input.wasPressed('KeyZ') && S.crewCd.MARA <= 0 && S.wanted > 0) {
-    S.wanted = Math.max(0, S.wanted - 1); S.crewCd.MARA = 90;
-    S.message = 'MARA · GHOST — one star gone'; S.messageUntil = S.time + 3;
+// ---- car enter / exit ----
+function tryEnterExitCar() {
+  if (S.inCar) {
+    // exit: leave the car where it is, step out beside it
+    const c = S.car;
+    S.inCar = false;
+    S.car = null;
+    lastCar = c;
+    S.px = c.mesh.position.x + Math.cos(c.heading) * 2.5;
+    S.pz = c.mesh.position.z - Math.sin(c.heading) * 2.5;
+    S.heading = c.heading;
+    playerGroup().visible = true;
+    S.message = 'ON FOOT'; S.messageUntil = S.time + 1.2;
+    return;
   }
-  if (input.wasPressed('KeyX') && S.crewCd.SULLY <= 0 && S.inCar) {
-    carCondition = 100; if (S.car) S.car.condition = 100; S.crewCd.SULLY = 60;
-    S.message = 'SULLY · PIT CREW — car repaired'; S.messageUntil = S.time + 3;
+  if (lastCar && Math.hypot(lastCar.mesh.position.x - S.px, lastCar.mesh.position.z - S.pz) < 5) {
+    S.inCar = true; S.car = lastCar;
+    playerGroup().visible = false;
+    S.message = lastCar.mesh.userData.def.name; S.messageUntil = S.time + 1.5;
+    return;
   }
-  if (input.wasPressed('KeyC') && S.crewCd.KIKI <= 0) {
-    S.lookoutUntil = S.time + 20; S.crewCd.KIKI = 60;
-    S.message = 'KIKI · LOOKOUT — patrols revealed 20s'; S.messageUntil = S.time + 3;
+  const near = nearestTrafficCar(S.px, S.pz, 5);
+  if (near) {
+    const type = near.type;
+    const x = near.mesh.position.x, z = near.mesh.position.z, h = near.mesh.rotation.y;
+    removeTrafficCar(scene, near);
+    const car = createPlayerCar(scene, type, x, z, h);
+    S.inCar = true; S.car = car;
+    playerGroup().visible = false;
+    S.carsJacked++;
+    addWanted(1);
+    S.jackedAt = S.time;
+    S.message = 'CARJACKED · ' + car.mesh.userData.def.name + ' · +1 STAR';
+    S.messageUntil = S.time + 2.5;
   }
-  for (const k of ['MARA', 'SULLY', 'KIKI']) S.crewCd[k] = Math.max(0, S.crewCd[k] - dt);
+}
 
-  if (!S.paused && S.started) {
-    S.time += dt;
-    // autopilot: drive toward mission target
-    if (S.autopilot && missions.mission()) {
-      const tp = missions.targetPos();
-      if (tp) {
-        if (!S.inCar) {
-          const c = spawnPlayerCar();
-          if (c) { S.inCar = true; S.car = { type: c.type, condition: carCondition }; S.carSpeed = 8; }
-        }
-        const dx = tp.x - S.px, dz = tp.z - S.pz;
-        const d = Math.hypot(dx, dz) || 1;
-        S.heading = Math.atan2(dx, dz);
-        S.px += (dx / d) * 10 * dt;
-        S.pz += (dz / d) * 10 * dt;
-        S.carSpeed = 10;
-        if (d < 8 && missions.mission().type === 'goto') { /* walk in */ }
-      }
-    }
-    // enter/exit car (F)
-    if (input.wasPressed('KeyF')) {
-      if (!S.inCar) {
-        const c = traffic.nearestCar(S.px, S.pz, 6);
-        if (c) {
-          S.inCar = true;
-          S.car = { type: c.type, condition: carCondition };
-          S.carSpeed = 0;
-          S.carsJacked++;
-          if (S.wanted === 0) { S.wanted = 1; S.seen = true; }
-          else S.wanted = Math.min(5, S.wanted + 1);
-          S.jackedAt = S.time;
-          S.message = 'Press F · Carjack ' + c.type.name;
-          S.messageUntil = S.time + 2;
-        }
-      } else {
-        S.inCar = false; S.car = null; S.carSpeed = 0;
-        S.px += Math.sin(S.heading) * 3; S.pz += Math.cos(S.heading) * 3;
-      }
-    }
-    // driving
-    if (S.inCar && S.car) {
-      const fwd = (input.isDown('KeyW') || input.isDown('ArrowUp') ? 1 : 0) - (input.isDown('KeyS') || input.isDown('ArrowDown') ? 0.6 : 0);
-      const steer = (input.isDown('KeyA') || input.isDown('ArrowLeft') ? 1 : 0) - (input.isDown('KeyD') || input.isDown('ArrowRight') ? 1 : 0);
-      const accel = 22, maxSpeed = 34;
-      S.carSpeed += fwd * accel * dt;
-      S.carSpeed -= S.carSpeed * 0.8 * dt;
-      S.carSpeed = Math.max(-8, Math.min(maxSpeed, S.carSpeed));
-      if (Math.abs(S.carSpeed) > 0.5) S.heading += steer * 1.6 * dt * Math.sign(S.carSpeed);
-      S.px += Math.sin(S.heading) * S.carSpeed * dt;
-      S.pz += Math.cos(S.heading) * S.carSpeed * dt;
-      S.px = Math.max(-310, Math.min(310, S.px));
-      S.pz = Math.max(-310, Math.min(310, S.pz));
-      S.speed = Math.abs(S.carSpeed);
-      // collisions drop condition
-      for (const c of traffic.cars) {
-        const d = Math.hypot(c.x - S.px, c.z - S.pz);
-        if (d < 3.2 && c !== S.car) {
-          carCondition = Math.max(0, carCondition - 4);
-          S.car.condition = carCondition;
-          S.carSpeed *= 0.5;
-        }
-      }
-    }
-    // mission start (E near marker)
-    if (input.wasPressed('KeyE')) {
-      const m = missions.mission();
-      if (m && !S.missionActive) {
-        const d0 = Math.hypot(-40 - S.px, -192 - S.pz);
-        const dT = missions.distToTarget();
-        if (S.missionIdx === 0 ? d0 < 12 : dT < 60) missions.startMission();
-        else if (dT < 12) missions.startMission();
-      }
-    }
-    // Gecko collection
-    for (const g of world.geckos) {
-      if (g.taken) continue;
-      if (Math.hypot(g.x - S.px, g.z - S.pz) < 3) {
-        g.taken = true; g.mesh.visible = false;
-        S.geckos++;
-        S.message = 'GOLDEN GECKO ' + S.geckos + '/20';
-        S.messageUntil = S.time + 2;
-        playPickup(S);
-      }
-    }
-    // stunt jump: airborne over a ramp-ish speed
-    if (!S.inCar && S.speed > 8) S.stuntJumps = Math.min(5, S.stuntJumps + 0);
-
-    world.update(dt, t);
-    traffic.update(dt);
-    player.update(dt, input, world, traffic, police);
-    police.update(dt, t);
-    missions.update(dt, t);
-    updateRadio(S, dt);
-    hud.update();
+// ---- crew abilities ----
+function useCrew(id) {
+  if (S.crewCd[id] > 0) return;
+  if (id === 'MARA') {
+    if (S.wanted === 0) return;
+    setWanted(S.wanted - 1);
+    S.crewCd.MARA = 90;
+    S.message = 'MARA · GHOST — plates swapped, -1 star';
+  } else if (id === 'SULLY') {
+    if (!S.inCar || !S.car) return;
+    S.car.condition = 100;
+    S.crewCd.SULLY = 60;
+    S.message = 'SULLY · PIT CREW — ride fully repaired';
+  } else if (id === 'KIKI') {
+    S.lookoutUntil = S.time + 20;
+    S.crewCd.KIKI = 60;
+    S.message = 'KIKI · LOOKOUT — patrols revealed on the map';
   }
+  S.messageUntil = S.time + 2.5;
+}
 
-  // camera: orbit with drag, follow player/car
-  const drag = input.dragDelta();
-  camYaw -= drag.x * 0.005;
-  camPitch = Math.max(0.12, Math.min(1.1, camPitch + drag.y * 0.003));
-  if (shotCam) {
-    shotCamera(shotNum, camera);
+// ---- autopilot (F9) ----
+function updateAutopilot(dt) {
+  if (!S.autopilot || !S.missionActive) return;
+  const [tx, tz] = missionTargetPos();
+  const dx = tx - S.px, dz = tz - S.pz;
+  const want = Math.atan2(dx, dz);
+  if (S.inCar && S.car) {
+    let dh = want - S.car.heading;
+    while (dh > Math.PI) dh -= Math.PI * 2;
+    while (dh < -Math.PI) dh += Math.PI * 2;
+    S.car.heading += Math.max(-1.4 * dt, Math.min(1.4 * dt, dh));
+    S.car.speed = Math.min(S.car.speed + 10 * dt, 22);
+    const nx = S.car.mesh.position.x + Math.sin(S.car.heading) * S.car.speed * dt;
+    const nz = S.car.mesh.position.z + Math.cos(S.car.heading) * S.car.speed * dt;
+    const fixed = world.resolveCircle(nx, nz, 1.6);
+    S.car.mesh.position.x = fixed.x; S.car.mesh.position.z = fixed.z;
+    S.car.mesh.rotation.y = S.car.heading;
+    S.px = fixed.x; S.pz = fixed.z;
+    S.carSpeed = S.car.speed;
   } else {
-    const tx = S.px, tz = S.pz;
-    const cx = tx - Math.sin(camYaw) * Math.cos(camPitch) * camDist;
-    const cz = tz - Math.cos(camYaw) * Math.cos(camPitch) * camDist;
-    const cy = 2 + Math.sin(camPitch) * camDist;
-    camera.position.lerp(new THREE.Vector3(cx, cy, cz), 0.12);
-    camera.lookAt(tx, 1.6, tz);
+    S.heading = want;
+    const nx = S.px + Math.sin(want) * 5.5 * dt;
+    const nz = S.pz + Math.cos(want) * 5.5 * dt;
+    const fixed = world.resolveCircle(nx, nz, 0.6);
+    S.px = fixed.x; S.pz = fixed.z;
   }
-  renderer.render(scene, camera);
 }
 
-animate();
-
+// ---- debug API ----
 window.__solara = {
   version: 'r10',
   S,
-  get traffic() { return traffic.cars.length; },
-  get cruisers() { return police.cruisers.length; },
-  get officers() { return police.officers.length; },
-  get policeCount() { return police.policeCount(); },
-  getState() { return JSON.parse(JSON.stringify(S)); },
-  nearestCar(x, z) {
-    const c = traffic.nearestCar(x, z, 200);
-    return c ? { x: c.x, z: c.z, name: c.type.name } : null;
-  },
+  get traffic() { return getTraffic(); },
+  get policeCount() { return policeCount(); },
+  get peds() { return peds; },
+  get geckos() { return world.geckos; },
+  get policeDots() { return policeDots(); },
+  hurt: (n) => hurtPlayer(n),
+  get calls() { return renderer.info.render.calls; },
+  get tris() { return renderer.info.render.triangles; },
+  get frames() { return frames; },
+  getState() { return JSON.parse(JSON.stringify({ ...S, car: undefined, crewCd: S.crewCd })); },
 };
+function policeDots() {
+  // positions for the minimap: derive from units list via live cruiser/officer meshes
+  const dots = [];
+  for (const c of getCruisers()) dots.push({ x: c.x, z: c.z });
+  for (const o of getOfficers()) dots.push({ x: o.x, z: o.z });
+  return dots;
+}
+
+// ---- staged shots ----
+const shot = shotNumber();
+if (shot > 0) {
+  applyShot(shot, { scene, camera, world });
+  if (shot !== 1) {
+    document.getElementById('start-screen').style.display = 'none';
+    document.getElementById('hud').style.display = 'block';
+  }
+}
+
+// ---- main loop ----
+const clock = new THREE.Clock();
+let frames = 0;
+function loop() {
+  requestAnimationFrame(loop);
+  const dt = Math.min(0.05, clock.getDelta());
+  S.time += dt;
+  for (const k of Object.keys(S.crewCd)) S.crewCd[k] = Math.max(0, S.crewCd[k] - dt);
+
+  if (S.started && !S.paused && !S.over) {
+    if (wasPressed('KeyF')) tryEnterExitCar();
+    if (wasPressed('KeyE')) tryStartMission();
+    if (wasPressed('KeyR')) reload();
+    if (wasPressed('KeyQ')) { S.station = (S.station + 1) % RADIO.length; S.message = '♪ ' + RADIO[S.station].name; S.messageUntil = S.time + 2; }
+    if (wasPressed('F9')) { S.autopilot = !S.autopilot; S.message = S.autopilot ? 'AUTOPILOT ON' : 'AUTOPILOT OFF'; S.messageUntil = S.time + 2; }
+    if (wasPressed('KeyZ')) useCrew('MARA');
+    if (wasPressed('KeyX')) useCrew('SULLY');
+    if (wasPressed('KeyC')) useCrew('KIKI');
+    for (let i = 0; i < 5; i++) if (wasPressed('Digit' + (i + 1))) switchWeapon(i);
+    if (wasPressed('KeyM')) { S.mapOpen = !S.mapOpen; if (S.mapOpen) { S.paused = true; document.getElementById('pause-menu').style.display = 'flex'; } }
+    if (S.autopilot) updateAutopilot(dt);
+    else if (S.inCar && S.car) updatePlayerCar(S.car, dt, world, { isDown });
+    else updatePlayer(dt, world, camYaw, () => [...shootableTargets(), ...pedTargets()]);
+    // gecko pickup
+    const got = world.collectGeckos(S.px, S.pz);
+    if (got > 0) {
+      S.geckosGot += got;
+      playPickup();
+      S.message = 'GOLDEN GECKO +' + got + ' · ' + S.geckosGot + '/20';
+      S.messageUntil = S.time + 2;
+    }
+    updateTraffic(dt, scene);
+    updatePolice(dt, S.time);
+    updateMissions(dt);
+    updatePeds(dt);
+    updateAudio();
+  }
+  if (wasPressed('Escape') && S.started) togglePause();
+  world.update(dt, S.time);
+  updateCamera(dt);
+  updateHUD(dt);
+  if (S.started) consumeClick();
+  endFrame();
+  renderer.render(scene, camera);
+  frames++;
+  if (frames === 3) window.__solaraReady = true;
+}
+loop();
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+document.getElementById('start-screen').addEventListener('click', () => initAudio(), { once: true });

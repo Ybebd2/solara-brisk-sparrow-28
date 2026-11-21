@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SOLARA — Vice City of the Sun</title>
+<link rel="icon" href="favicon.png">
+<script type="importmap">
+{ "imports": { "three": "./vendor/three/three.module.min.js" } }
+</script>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #0a141e; font-family: 'Segoe UI', Arial, sans-serif; color: #fff; }
+  #app { position: fixed; inset: 0; }
+  #app canvas { display: block; }
+  #hud { display: none; position: fixed; inset: 0; pointer-events: none; z-index: 5; }
+  .panel { background: rgba(8, 18, 28, 0.78); border: 1px solid rgba(255, 213, 79, 0.4); border-radius: 8px; padding: 8px 12px; }
+  #mission-panel { position: absolute; top: 12px; left: 12px; max-width: 420px; }
+  #mission-title { font-weight: 700; font-size: 15px; color: #ffd54f; }
+  #mission-stage { font-size: 12px; color: #4fc3f7; margin-top: 2px; }
+  #mission-progress .seg { display: inline-block; width: 26px; height: 6px; background: #37474f; margin-right: 3px; border-radius: 3px; }
+  #mission-progress .seg.filled { background: #ffd54f; }
+  #mission-dist, #mission-timer { font-size: 12px; color: #cfd8dc; margin-top: 2px; }
+  #stats-top { position: absolute; top: 12px; right: 12px; text-align: right; }
+  #cash { font-size: 22px; font-weight: 800; color: #69f0ae; }
+  #clock { font-size: 14px; color: #e0f2f1; }
+  #rank { font-size: 12px; color: #4fc3f7; }
+  #stars .star { font-size: 20px; color: #37474f; -webkit-text-stroke: 1px #000; }
+  #stars .star.lit { color: #ffd54f; }
+  #police-panel { position: absolute; top: 110px; left: 50%; transform: translateX(-50%); min-width: 300px; text-align: center; }
+  #police-head { font-weight: 700; font-size: 13px; color: #ff8a80; }
+  #police-units .unit { font-size: 12px; color: #eceff1; }
+  #police-units .unit.pursuit { color: #ffb74d; }
+  #police-units .unit.firing { color: #ff5252; }
+  #police-units .unit.wrecked { color: #90a4ae; }
+  #air-unit { color: #ffd54f; font-weight: 700; font-size: 12px; margin-top: 4px; }
+  #stealth-badge { position: absolute; top: 190px; left: 50%; transform: translateX(-50%); padding: 4px 14px; border-radius: 20px; font-weight: 800; font-size: 13px; }
+  #stealth-badge.hidden { background: #1565c0; }
+  #stealth-badge.in-sight { background: #c62828; }
+  #bars { position: absolute; bottom: 170px; right: 12px; width: 220px; }
+  .bar-row { display: flex; align-items: center; gap: 6px; font-size: 11px; margin-top: 4px; }
+  .bar { flex: 1; height: 10px; background: #37474f; border-radius: 5px; overflow: hidden; }
+  #health-bar { height: 100%; background: #66bb6a; width: 100%; }
+  #armour-bar { height: 100%; background: #42a5f5; width: 40%; }
+  #weapon-slots { position: absolute; bottom: 12px; right: 12px; display: flex; gap: 6px; }
+  .slot { background: rgba(8,18,28,0.78); border: 1px solid #546e7a; border-radius: 6px; padding: 6px 8px; font-size: 12px; }
+  .slot.sel { border-color: #ffd54f; background: rgba(255,213,79,0.2); }
+  .slot b { color: #ffd54f; }
+  #vehicle-hud { position: absolute; bottom: 70px; right: 12px; text-align: right; background: rgba(8,18,28,0.78); border: 1px solid rgba(255,213,79,0.4); border-radius: 8px; padding: 8px 12px; }
+  #car-name { font-weight: 800; font-size: 15px; }
+  #car-speed { font-size: 24px; font-weight: 800; color: #fff; }
+  #car-gear { display: inline-block; background: #ffd54f; color: #000; font-weight: 800; padding: 2px 8px; border-radius: 4px; }
+  #car-radio { font-size: 12px; color: #ce93d8; }
+  #car-cond { height: 100%; background: #66bb6a; }
+  #minimap-wrap { position: absolute; bottom: 12px; left: 12px; }
+  #minimap { border-radius: 50%; border: 2px solid rgba(255,255,255,0.5); }
+  #district-label { text-align: center; font-size: 12px; color: #fff; text-shadow: 0 1px 2px #000; margin-top: 4px; }
+  #message { position: absolute; bottom: 210px; left: 50%; transform: translateX(-50%); font-size: 18px; font-weight: 700; color: #ffd54f; text-shadow: 0 2px 4px #000; }
+  #dialogue { position: absolute; bottom: 250px; left: 50%; transform: translateX(-50%); width: 560px; background: rgba(8,18,28,0.85); border: 1px solid #e040fb; border-radius: 10px; padding: 12px 16px; }
+  #dialogue-speaker { font-weight: 800; color: #f48fb1; font-size: 13px; }
+  #dialogue-text { font-size: 15px; margin-top: 4px; }
+  #dialogue-reply { font-size: 13px; color: #4fc3f7; margin-top: 6px; font-style: italic; }
+  #wasted { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; flex-direction: column; background: rgba(0,0,0,0.55); z-index: 20; font-size: 84px; font-weight: 900; color: #fff; letter-spacing: 6px; text-shadow: 0 4px 0 #c62828; }
+  #wasted-sub { font-size: 18px; letter-spacing: 1px; margin-top: 12px; color: #ffccbc; }
+  #gecko-counter { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); font-size: 13px; color: #ffd700; }
+  #crosshair { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 26px; color: #ff5252; display: none; }
+  #start-screen { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 10; background: linear-gradient(180deg, rgba(10,20,40,0.25), rgba(10,20,40,0.75)); }
+  #start-screen h1 { font-size: 64px; margin: 0; letter-spacing: 4px; color: #ffd54f; text-shadow: 0 4px 0 #e040fb, 0 8px 24px #000; }
+  #start-screen h2 { font-size: 20px; color: #4fc3f7; margin: 6px 0 24px; letter-spacing: 2px; }
+  #start-screen button { pointer-events: auto; font-size: 20px; font-weight: 800; padding: 14px 44px; margin: 6px; border: none; border-radius: 10px; background: #ffd54f; color: #111; cursor: pointer; }
+  #start-screen button:hover { background: #ffea00; }
+  #start-screen .sub { margin-top: 18px; font-size: 13px; color: #cfd8dc; text-shadow: 0 1px 2px #000; }
+  #pause-menu { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; z-index: 15; background: rgba(0,0,0,0.6); }
+  .pause-card { background: rgba(8,18,28,0.95); border: 1px solid #ffd54f; border-radius: 12px; padding: 24px 32px; max-width: 640px; max-height: 85vh; overflow: auto; }
+  .pause-card h2 { margin: 0 0 8px; color: #ffd54f; }
+  .pause-card .tabs { font-size: 13px; color: #4fc3f7; margin-bottom: 12px; }
+  .pause-card h3 { color: #69f0ae; margin: 14px 0 6px; }
+  .story-row { font-size: 14px; padding: 3px 0; }
+  .story-row.done { color: #81c784; }
+  .story-row.cur { color: #ffd54f; font-weight: 700; }
+  .stats { font-size: 13px; line-height: 1.7; }
+  #map-overlay { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; z-index: 14; background: rgba(0,0,0,0.65); color: #fff; font-size: 18px; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="hud"></div>
+<div id="start-screen">
+  <h1>SOLARA</h1>
+  <h2>VICE CITY OF THE SUN</h2>
+  <button id="start-btn">NEW GAME</button>
+  <button id="load-btn">LOAD GAME</button>
+  <button onclick="document.getElementById('start-screen').style.display='none'">SETTINGS</button>
+  <div class="sub">WASD move · Shift sprint · Space jump · E mission · F enter/exit car · R reload · 1–5 weapons · Q radio · M map · F9 autopilot · Z/X/C crew · Esc pause</div>
+  <div class="sub">Everything here is made in code: city, cars, people, music.</div>
+</div>
+<div id="pause-menu"></div>
+<div id="map-overlay">MAP — 7 districts · click waypoint (M to close)</div>
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>
